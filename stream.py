@@ -3,11 +3,12 @@
 # http://yasinam.ir/
 
 import io
-import picamera
+import subprocess
 import logging
 import socketserver
 from threading import Condition
 from http import server
+from time import sleep
 
 stream_status = False
 stream_path = ''
@@ -38,11 +39,39 @@ class StreamingHandler(server.BaseHTTPRequestHandler):
             self.send_header('Pragma', 'no-cache')
             self.send_header('Content-Type', 'multipart/x-mixed-replace; boundary=FRAME')
             self.end_headers()
+
+            proc = subprocess.Popen('libcamera-vid -n -t 0 --codec mjpeg -o -', shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            print('start')
+            buffer = io.BytesIO()
+            # sleep(5)
+            # print(proc.pid, proc.returncode)
+            # print(proc.stderr.readlines())
             try:
+                framecount = 0
                 while True:
-                    with output.condition:
-                        output.condition.wait()
-                        frame = output.frame
+                    frame = None
+                    while True:
+                        # print('read')
+                        buf = proc.stdout.read1()
+                        # print(len(buf), buf[:16])
+                        index = buf.find(b'\xff\xd8')
+                        if index>0:
+                            buffer.write(buf[:index])
+                        # if buf.startswith(b'\xff\xd8'):
+                            framecount+=1
+                            print('Frames', framecount)
+                            # New frame, copy the existing buffer's content
+                            buffer.truncate()
+                            frame = buffer.getvalue()
+                            buffer.seek(0)
+                            buffer.write(buf[index:])
+                            if framecount==1:
+                                pass
+                            else:
+                                break
+                        else:
+                            buffer.write(buf)
+                    # print('New Frame')
                     self.wfile.write(b'--FRAME\r\n')
                     self.send_header('Content-Type', 'image/jpeg')
                     self.send_header('Content-Length', len(frame))
@@ -64,25 +93,23 @@ class StreamingServer(socketserver.ThreadingMixIn, server.HTTPServer):
 def run(listen, port, path, width, height, framerate, quality, rotation, vflip, hflip, **kwargs):
     global output, server, stream_status, stream_path
     stream_path = path
-    # with picamera.PiCamera(resolution='1280x720', framerate=60) as camera:
-    # with picamera.PiCamera(resolution='1920x1080', framerate=30) as camera:
-    # with picamera.PiCamera(resolution='640x480', framerate=90) as camera:
-    with picamera.PiCamera() as camera:
-        output = StreamingOutput()
-        camera.resolution = (width,height)
-        camera.framerate = framerate
-        camera.rotation = rotation
-        camera.hflip = hflip
-        camera.vflip = vflip
-        camera.start_recording(output, format='mjpeg', quality=max(min(quality,100),1))
-        print(camera.frame, camera.resolution,camera.framerate,camera.vflip,camera.hflip,camera.rotation)
-        try:
-            address = (listen, port)
-            stream_status = True
-            server = StreamingServer(address, StreamingHandler)
-            server.serve_forever()
-        finally:
-            camera.stop_recording()
+
+    # output = StreamingOutput()
+    # camera.resolution = (width,height)
+    # camera.framerate = framerate
+    # camera.rotation = rotation
+    # camera.hflip = hflip
+    # camera.vflip = vflip
+    # camera.start_recording(output, format='mjpeg', quality=max(min(quality,100),1))
+    # print(camera.frame, camera.resolution,camera.framerate,camera.vflip,camera.hflip,camera.rotation)
+    try:
+        address = (listen, port)
+        stream_status = True
+        server = StreamingServer(address, StreamingHandler)
+        server.serve_forever()
+    finally:
+        pass
+        # camera.stop_recording()
 
 def status():
     global stream_status
